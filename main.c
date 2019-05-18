@@ -44,26 +44,51 @@ PROGMEM const uint8_t reverse_byte[256] = {
 
 struct serial_handle ser;
 
+volatile uint16_t pw = 1000;
+
+void update_pw() {
+    if ((pw < 300) || (pw > 2200)) {
+        return;
+    }
+    OCR1A = (pw >> 3) - 8;
+    OCR1B = (pw & 0x03) + 64;
+}
+
+uint8_t flags = 1;
+uint32_t torque = 0;
+uint32_t last_torque = 0xAABBCCDD;
+
 int main() {
     ATtiny_serial_init();
+    OCR1A = 182;
+    OCR1B = 100;
+    // ADC
+    ADMUX = (0 << ADLAR) | 0b11; // ref = vcc, adlar = on, mux = adc3 (PB3)
+    DIDR0 |= (1 << ADC3D);
+
     DDRB |= (1 << PB4);
     // setup timer 1 for 50 Hz
     TCCR1 = (0 << PWM1A) | 7;  //  1/64 MHz
-    OCR1A = 200;               // course val to run at 1/8 MHz
-    OCR1B = 200;               // fine val to run at 1 MHz
-    // OCR1C = 230;
     TIMSK |= (1 << TOIE1) | (0 << OCIE1A) | (0 << OCIE1B);      // Enable the compare interrupts
     sei();
     while(1) {
+        ser.write_buf[0] = pgm_read_byte(&reverse_byte[OCR1A]);
+        ser.write_buf[1] = pgm_read_byte(&reverse_byte[OCR1B]);
+        ser.write_buf[2] = pgm_read_byte(&reverse_byte[((uint8_t*)&last_torque)[0]]); // ((uint8_t*)&last_torque)[1];
+        ser.write_buf[3] = pgm_read_byte(&reverse_byte[((uint8_t*)&last_torque)[1]]); // ((uint8_t*)&last_torque)[2];
+        ser.write_buf[4] = pgm_read_byte(&reverse_byte[((uint8_t*)&last_torque)[2]]); // ((uint8_t*)&last_torque)[3];
+        ser.write_buf[5] = pgm_read_byte(&reverse_byte[((uint8_t*)&last_torque)[3]]); // ((uint8_t*)&last_torque)[4];
         if (ser.read_flag != 0) {
-            OCR1A = pgm_read_byte(&reverse_byte[ser.read_buf[0]]);
-            OCR1B = pgm_read_byte(&reverse_byte[ser.read_buf[1]]);
-            ser.write_buf[0] = pgm_read_byte(&reverse_byte[OCR1A]);
-            ser.write_buf[1] = pgm_read_byte(&reverse_byte[OCR1B]);
+            ((uint8_t*)&pw)[0] = pgm_read_byte(&reverse_byte[ser.read_buf[0]]);
+            ((uint8_t*)&pw)[1] = pgm_read_byte(&reverse_byte[ser.read_buf[1]]);
             ser.read_flag = 0;
-            ATtiny_serial_write_async(2);
+            ATtiny_serial_write_async(6);
         }
-        asm("nop");
+        // ATtiny_serial_write_async(6);
+        if (flags & 0x01) {
+            flags &= ~0x01;
+            update_pw();
+        }
     }
 }
 
@@ -83,6 +108,8 @@ ISR(TIM1_OVF_vect) {
     TIMSK |= (1 << OCIE1A);
     GTCCR |= (1 << PSR1);  // reset the prescale reg
     TCCR1 = 4;  // 1/8 MHz
+    // stop ADC
+    ADCSRA = 0;
 }
 
 ISR(TIM1_COMPA_vect) {
@@ -105,5 +132,13 @@ ISR(TIM1_COMPB_vect) {
     TIMSK |= (1 << TOIE1);
     GTCCR |= (1 << PSR1);  // reset the prescale reg
     TCCR1 = 7;  // 1/64 MHz
+    flags ^= 0x01;
+    // start ADC runs
+    // ADCSRA = (1 << ADEN) | (1 << ADSC) | (1 << ADIE) | (1 << ADIF);
 }
 
+// ISR(ADC_vect) {
+//     ADCSRA |= (1<<ADSC);
+//     // torque += ADCL;
+//     // torque += ADCH << 8;
+// }
