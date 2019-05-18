@@ -1,0 +1,3 @@
+[submodule "ATtiny_hardware_serial"]
+	path = ATtiny_hardware_serial
+	url = ../ATtiny_hardware_serial
